@@ -8,7 +8,8 @@ import {
 } from 'lucide-react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Doughnut } from 'react-chartjs-2';
-import { supabase } from '../lib/supabase'; // Importando a conexão
+// Use dois pontos (..) para voltar uma pasta e entrar em lib
+import { supabase } from '../lib/supabase';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
