@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, List, PieChart, User, Moon, LogOut, 
   Home, Plus, Settings, TrendingUp, TrendingDown, 
-  CheckCircle, Trash2, Lock, FileText, Zap, Edit, RefreshCw, Mail
+  CheckCircle, Trash2, Lock, FileText, Zap, Edit, RefreshCw, Mail, AlertTriangle
 } from 'lucide-react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Doughnut } from 'react-chartjs-2';
@@ -15,7 +15,7 @@ ChartJS.register(ArcElement, Tooltip, Legend);
 export default function FinProApp() {
   const [mounted, setMounted] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [session, setSession] = useState(null); // Sessão real do usuário
+  const [session, setSession] = useState(null);
   const [activeTab, setActiveTab] = useState('home');
   const [showModal, setShowModal] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
@@ -27,11 +27,11 @@ export default function FinProApp() {
   // Login States
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [authMode, setAuthMode] = useState('login'); // 'login' ou 'signup'
+  const [authMode, setAuthMode] = useState('login');
   const [authLoading, setAuthLoading] = useState(false);
 
   // Form States
-  const [form, setForm] = useState({ desc: '', val: '', type: 'out', cat: 'Outros' });
+  const [form, setForm] = useState({ desc: '', val: '', type: 'out', cat: '' }); // cat vazio inicialmente
   const [profile, setProfile] = useState({ name: 'Usuário', goal: 2000, dark: false });
 
   const pdfRef = useRef(); 
@@ -40,20 +40,17 @@ export default function FinProApp() {
   useEffect(() => {
     setMounted(true);
     
-    // Verifica se já existe um usuário logado
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session) fetchTransactions();
     });
 
-    // Escuta mudanças de login (Login/Logout)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session) fetchTransactions();
-      else setTransactions([]); // Limpa dados ao sair
+      else setTransactions([]);
     });
 
-    // Carrega tema
     const localConfig = localStorage.getItem('finpro_config');
     if (localConfig) {
       const parsed = JSON.parse(localConfig);
@@ -72,7 +69,7 @@ export default function FinProApp() {
     }
   }, [profile, mounted]);
 
-  // --- AUTENTICAÇÃO REAL ---
+  // --- AUTH ---
   const handleAuth = async () => {
     setAuthLoading(true);
     if (authMode === 'login') {
@@ -92,10 +89,9 @@ export default function FinProApp() {
     setSession(null);
   };
 
-  // --- BANCO DE DADOS ---
+  // --- DATABASE ---
   async function fetchTransactions() {
     setLoading(true);
-    // O RLS do Supabase garante que só venham os dados deste usuário
     const { data, error } = await supabase
       .from('transactions')
       .select('*')
@@ -106,7 +102,7 @@ export default function FinProApp() {
         id: item.id,
         desc: item.description,
         val: parseFloat(item.value),
-        cat: item.category,
+        cat: item.category, // Agora aceita qualquer texto
         date: item.date_display,
         type: item.type
       }));
@@ -117,6 +113,10 @@ export default function FinProApp() {
 
   async function saveTransaction() {
     if (!form.desc || !form.val || !session) return;
+    
+    // Se a categoria estiver vazia, define padrão
+    const categoryFinal = form.cat.trim() === '' ? 'Outros' : form.cat;
+
     setLoading(true);
 
     const valFloat = parseFloat(form.val);
@@ -126,18 +126,17 @@ export default function FinProApp() {
     try {
       if (editingId) {
         await supabase.from('transactions')
-          .update({ description: form.desc, value: finalVal, category: form.cat, type: form.type })
+          .update({ description: form.desc, value: finalVal, category: categoryFinal, type: form.type })
           .eq('id', editingId);
         showToast("Atualizado!");
       } else {
-        // O user_id é inserido automaticamente pelo default do banco ou podemos mandar explícito
         await supabase.from('transactions').insert([{
           description: form.desc,
           value: finalVal,
-          category: form.cat,
+          category: categoryFinal,
           date_display: dateStr,
           type: form.type,
-          user_id: session.user.id // Garante o dono
+          user_id: session.user.id
         }]);
         showToast("Salvo!");
       }
@@ -152,19 +151,46 @@ export default function FinProApp() {
   }
 
   async function deleteEntry(id) {
-    if (!confirm("Excluir?")) return;
+    if (!confirm("Excluir item?")) return;
     await supabase.from('transactions').delete().eq('id', id);
     setTransactions(prev => prev.filter(t => t.id !== id));
     showToast("Excluído.");
   }
 
+  // --- NOVA FUNÇÃO: LIMPAR TUDO ---
+  async function clearAllData() {
+    if (!confirm("⚠️ ATENÇÃO: Isso apagará TODOS os seus lançamentos para sempre. Tem certeza absoluta?")) return;
+    
+    setLoading(true);
+    try {
+      // Deleta tudo onde o ID não é nulo (ou seja, tudo)
+      // O RLS do Supabase garante que só apaga o que é do usuário logado
+      const { error } = await supabase
+        .from('transactions')
+        .delete()
+        .neq('id', 0); 
+
+      if (error) throw error;
+
+      setTransactions([]); // Limpa a tela
+      showToast("Todos os registros foram apagados.");
+    } catch (error) {
+      console.error(error);
+      showToast("Erro ao limpar registros.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // --- UTILITÁRIOS ---
   const showToast = (msg) => { setToastMsg(msg); setTimeout(() => setToastMsg(''), 3000); };
+  
   const handleEdit = (t) => {
     setForm({ desc: t.desc, val: Math.abs(t.val), type: t.val < 0 ? 'out' : 'in', cat: t.cat });
     setEditingId(t.id); setShowModal(true);
   };
-  const closeModal = () => { setForm({ desc: '', val: '', type: 'out', cat: 'Outros' }); setEditingId(null); setShowModal(false); };
+  
+  const closeModal = () => { setForm({ desc: '', val: '', type: 'out', cat: '' }); setEditingId(null); setShowModal(false); };
   
   const fmt = (v) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   const tin = transactions.filter(t => t.val > 0).reduce((a, b) => a + b.val, 0);
@@ -173,13 +199,14 @@ export default function FinProApp() {
   const perc = profile.goal > 0 ? Math.min((tout / profile.goal) * 100, 100) : 0;
   const filteredTransactions = transactions.filter(t => t.desc.toLowerCase().includes(searchTerm.toLowerCase()));
 
+  // Gera cores aleatórias para categorias novas
   const chartData = {
     labels: [...new Set(transactions.filter(t => t.val < 0).map(t => t.cat))],
     datasets: [{
       data: [...new Set(transactions.filter(t => t.val < 0).map(t => t.cat))].map(c => 
         Math.abs(transactions.filter(t => t.cat === c && t.val < 0).reduce((s, t) => s + t.val, 0))
       ),
-      backgroundColor: ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'], borderWidth: 0
+      backgroundColor: ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#6366f1'], borderWidth: 0
     }]
   };
 
@@ -192,7 +219,7 @@ export default function FinProApp() {
 
   if (!mounted) return null;
 
-  // TELA DE LOGIN REAL
+  // LOGIN SCREEN
   if (!session) {
     return (
       <div className="wrapper" style={{ justifyContent: 'center', alignItems: 'center' }}>
@@ -315,13 +342,30 @@ export default function FinProApp() {
           {activeTab === 'profile' && (
             <section>
               <div className="card">
-                <h3>Perfil</h3>
+                <h3>Meu Perfil</h3>
                 <div style={{ marginTop: 20 }}>
-                  <label>Seu Nome</label>
+                  <label>Como quer ser chamado?</label>
                   <input type="text" value={profile.name} onChange={e => setProfile({...profile, name: e.target.value})} />
-                  <label>Meta de Gastos</label>
+                  
+                  <label>Meta de Gastos (R$)</label>
                   <input type="number" value={profile.goal} onChange={e => setProfile({...profile, goal: e.target.value})} />
-                  <small>E-mail: {session.user.email}</small>
+                  
+                  <small style={{display:'block', marginBottom:20, color:'var(--text-sub)'}}>Conta vinculada a: {session.user.email}</small>
+                  
+                  <button className="btn btn-primary" style={{ width: '100%', marginBottom: 15 }} onClick={() => showToast('Preferências salvas!')}>Salvar Preferências</button>
+                  
+                  <hr style={{border:'0', borderTop:'1px solid var(--border)', margin:'20px 0'}} />
+                  
+                  <h4 style={{marginBottom:10, color:'var(--danger)'}}>Zona de Perigo</h4>
+                  <button 
+                    className="btn" 
+                    style={{ width: '100%', background: '#fee2e2', color: 'var(--danger)', border:'1px solid #fca5a5' }} 
+                    onClick={clearAllData}
+                    disabled={loading}
+                  >
+                    <AlertTriangle size={18} /> {loading ? 'Apagando...' : 'Apagar Todos os Registros'}
+                  </button>
+                  <p style={{fontSize:'0.8rem', color:'var(--danger)', marginTop:5}}>Cuidado: Essa ação não pode ser desfeita. Apaga tudo do banco de dados.</p>
                 </div>
               </div>
             </section>
@@ -333,20 +377,38 @@ export default function FinProApp() {
         <div className="modal-overlay">
           <div className="modal-content">
             <h3 style={{ marginBottom: 20 }}>{editingId ? 'Editar' : 'Novo'}</h3>
+            
+            <label style={{fontSize:'0.85rem', fontWeight:'bold', display:'block', marginBottom:5}}>Tipo</label>
             <select value={form.type} onChange={e => setForm({...form, type: e.target.value})}>
               <option value="in">Entrada (+)</option>
               <option value="out">Saída (-)</option>
             </select>
-            <input type="text" placeholder="Descrição" value={form.desc} onChange={e => setForm({...form, desc: e.target.value})} />
-            <input type="number" placeholder="Valor" value={form.val} onChange={e => setForm({...form, val: e.target.value})} />
-            <select value={form.cat} onChange={e => setForm({...form, cat: e.target.value})}>
-              <option value="Salário">💳 Salário</option>
-              <option value="Alimentação">🍴 Alimentação</option>
-              <option value="Transporte">🚗 Transporte</option>
-              <option value="Saúde">🏥 Saúde</option>
-              <option value="Lazer">🍿 Lazer</option>
-              <option value="Outros">📦 Outros</option>
-            </select>
+
+            <label style={{fontSize:'0.85rem', fontWeight:'bold', display:'block', marginBottom:5}}>Descrição</label>
+            <input type="text" placeholder="Ex: Mercado, Freelance..." value={form.desc} onChange={e => setForm({...form, desc: e.target.value})} />
+
+            <label style={{fontSize:'0.85rem', fontWeight:'bold', display:'block', marginBottom:5}}>Valor (R$)</label>
+            <input type="number" placeholder="0,00" value={form.val} onChange={e => setForm({...form, val: e.target.value})} />
+
+            <label style={{fontSize:'0.85rem', fontWeight:'bold', display:'block', marginBottom:5}}>Categoria</label>
+            {/* AQUI ESTÁ A MUDANÇA: INPUT COM DATALIST */}
+            <input 
+              list="categories" 
+              placeholder="Selecione ou digite uma nova..." 
+              value={form.cat} 
+              onChange={e => setForm({...form, cat: e.target.value})} 
+            />
+            <datalist id="categories">
+              <option value="Salário" />
+              <option value="Alimentação" />
+              <option value="Transporte" />
+              <option value="Saúde" />
+              <option value="Lazer" />
+              <option value="Casa" />
+              <option value="Educação" />
+              <option value="Investimentos" />
+            </datalist>
+
             <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
               <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={saveTransaction} disabled={loading}>{loading ? '...' : 'Salvar'}</button>
               <button className="btn" style={{ flex: 1, background: 'var(--bg)', justifyContent: 'center' }} onClick={closeModal}>Cancelar</button>
@@ -360,8 +422,8 @@ export default function FinProApp() {
         <p>Usuário: {profile.name} ({session.user.email})</p>
         <hr style={{ margin: '20px 0' }} />
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-          <thead><tr style={{ borderBottom: '2px solid #333' }}><th>Data</th><th>Descrição</th><th>Valor</th></tr></thead>
-          <tbody>{transactions.map(t => <tr key={t.id} style={{ borderBottom: '1px solid #ccc' }}><td style={{ padding: 8 }}>{t.date}</td><td>{t.desc}</td><td style={{ color: t.val < 0 ? 'red' : 'green' }}>{t.val.toFixed(2)}</td></tr>)}</tbody>
+          <thead><tr style={{ borderBottom: '2px solid #333' }}><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th></tr></thead>
+          <tbody>{transactions.map(t => <tr key={t.id} style={{ borderBottom: '1px solid #ccc' }}><td style={{ padding: 8 }}>{t.date}</td><td>{t.desc}</td><td>{t.cat}</td><td style={{ color: t.val < 0 ? 'red' : 'green' }}>{t.val.toFixed(2)}</td></tr>)}</tbody>
         </table>
       </div>
     </>
