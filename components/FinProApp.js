@@ -31,7 +31,7 @@ export default function FinProApp() {
   const [authLoading, setAuthLoading] = useState(false);
 
   // Form States
-  const [form, setForm] = useState({ desc: '', val: '', type: 'out', cat: '' }); // cat vazio inicialmente
+  const [form, setForm] = useState({ desc: '', val: '', type: 'out', cat: '' });
   const [profile, setProfile] = useState({ name: 'Usuário', goal: 2000, dark: false });
 
   const pdfRef = useRef(); 
@@ -102,7 +102,7 @@ export default function FinProApp() {
         id: item.id,
         desc: item.description,
         val: parseFloat(item.value),
-        cat: item.category, // Agora aceita qualquer texto
+        cat: item.category,
         date: item.date_display,
         type: item.type
       }));
@@ -114,7 +114,6 @@ export default function FinProApp() {
   async function saveTransaction() {
     if (!form.desc || !form.val || !session) return;
     
-    // Se a categoria estiver vazia, define padrão
     const categoryFinal = form.cat.trim() === '' ? 'Outros' : form.cat;
 
     setLoading(true);
@@ -157,14 +156,11 @@ export default function FinProApp() {
     showToast("Excluído.");
   }
 
-  // --- NOVA FUNÇÃO: LIMPAR TUDO ---
   async function clearAllData() {
     if (!confirm("⚠️ ATENÇÃO: Isso apagará TODOS os seus lançamentos para sempre. Tem certeza absoluta?")) return;
     
     setLoading(true);
     try {
-      // Deleta tudo onde o ID não é nulo (ou seja, tudo)
-      // O RLS do Supabase garante que só apaga o que é do usuário logado
       const { error } = await supabase
         .from('transactions')
         .delete()
@@ -172,7 +168,7 @@ export default function FinProApp() {
 
       if (error) throw error;
 
-      setTransactions([]); // Limpa a tela
+      setTransactions([]);
       showToast("Todos os registros foram apagados.");
     } catch (error) {
       console.error(error);
@@ -199,7 +195,6 @@ export default function FinProApp() {
   const perc = profile.goal > 0 ? Math.min((tout / profile.goal) * 100, 100) : 0;
   const filteredTransactions = transactions.filter(t => t.desc.toLowerCase().includes(searchTerm.toLowerCase()));
 
-  // Gera cores aleatórias para categorias novas
   const chartData = {
     labels: [...new Set(transactions.filter(t => t.val < 0).map(t => t.cat))],
     datasets: [{
@@ -219,12 +214,14 @@ export default function FinProApp() {
 
   if (!mounted) return null;
 
-  // LOGIN SCREEN
+  // --- TELA DE LOGIN (COM LOGO) ---
   if (!session) {
     return (
       <div className="wrapper" style={{ justifyContent: 'center', alignItems: 'center' }}>
         <div className="card" style={{ maxWidth: '400px', width: '100%', textAlign: 'center' }}>
-          <div style={{ width: 60, height: 60, background: 'var(--primary)', color: 'white', borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}><Lock size={30} /></div>
+          {/* AQUI: Substituí o ícone de cadeado pela sua logo */}
+          <img src="/logo.png" alt="FinPro Logo" style={{ width: 100, height: 100, margin: '0 auto 20px', display: 'block' }} />
+          
           <h2>{authMode === 'login' ? 'Entrar no FinPro' : 'Criar Conta'}</h2>
           <p style={{ color: 'var(--text-sub)', marginBottom: 25 }}>Seus dados seguros na nuvem.</p>
           
@@ -257,13 +254,18 @@ export default function FinProApp() {
     );
   }
 
+  // --- TELA PRINCIPAL ---
   return (
     <>
       {toastMsg && <div className="toast-container" style={{ position: 'fixed', top: 20, right: 20, zIndex: 9999 }}><div className="card" style={{ borderLeft: '5px solid var(--primary)', padding: '15px 25px', display: 'flex', gap: 10 }}><CheckCircle size={18} /> {toastMsg}</div></div>}
 
       <div className="wrapper">
         <aside className="sidebar">
-          <div style={{ fontWeight: 900, fontSize: '1.5rem', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 40 }}><Zap /> FinPro</div>
+          {/* AQUI: Substituí o ícone de raio pela sua logo */}
+          <div style={{ fontWeight: 900, fontSize: '1.5rem', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 40 }}>
+            <img src="/logo.png" alt="FinPro" style={{ width: 32, height: 32 }} />
+            FinPro
+          </div>
           <nav style={{ flex: 1 }}>
             <div className={`nav-item ${activeTab === 'home' ? 'active' : ''}`} onClick={() => setActiveTab('home')}><LayoutDashboard size={20} /> Dashboard</div>
             <div className={`nav-item ${activeTab === 'extract' ? 'active' : ''}`} onClick={() => setActiveTab('extract')}><List size={20} /> Transações</div>
@@ -391,7 +393,6 @@ export default function FinProApp() {
             <input type="number" placeholder="0,00" value={form.val} onChange={e => setForm({...form, val: e.target.value})} />
 
             <label style={{fontSize:'0.85rem', fontWeight:'bold', display:'block', marginBottom:5}}>Categoria</label>
-            {/* AQUI ESTÁ A MUDANÇA: INPUT COM DATALIST */}
             <input 
               list="categories" 
               placeholder="Selecione ou digite uma nova..." 
