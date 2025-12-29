@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "FinPro Elite",
   description: "Gestão Financeira Inteligente",
-  manifest: "/manifest.json", // Link para o manifesto
+  manifest: "/manifest.json",
   icons: {
     apple: "/icon-192x192.png",
   },
@@ -15,7 +15,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  userScalable: false, // Sensação de app nativo (não deixa dar zoom)
+  userScalable: false,
 };
 
 export default function RootLayout({
@@ -25,7 +25,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-br">
-      <body>{children}</body>
+      {/* ADICIONE O suppressHydrationWarning AQUI: */}
+      <body suppressHydrationWarning={true}>
+        {children}
+      </body>
     </html>
   );
 }
