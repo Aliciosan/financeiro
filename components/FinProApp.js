@@ -354,14 +354,14 @@ export default function FinProApp() {
                   
                   <small style={{display:'block', marginBottom:20, color:'var(--text-sub)'}}>Conta vinculada a: {session.user.email}</small>
                   
-                  <button className="btn btn-primary" style={{ width: '100%', marginBottom: 15 }} onClick={() => showToast('Preferências salvas!')}>Salvar Preferências</button>
+                  <button className="btn btn-primary" style={{ marginBottom: 15 }} onClick={() => showToast('Preferências salvas!')}>Salvar Preferências</button>
                   
                   <hr style={{border:'0', borderTop:'1px solid var(--border)', margin:'20px 0'}} />
                   
                   <h4 style={{marginBottom:10, color:'var(--danger)'}}>Zona de Perigo</h4>
                   <button 
                     className="btn" 
-                    style={{ width: '100%', background: '#fee2e2', color: 'var(--danger)', border:'1px solid #fca5a5' }} 
+                    style={{ background: '#fee2e2', color: 'var(--danger)', border:'1px solid #fca5a5' }} 
                     onClick={clearAllData}
                     disabled={loading}
                   >
