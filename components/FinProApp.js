@@ -4,77 +4,104 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, List, PieChart, User, Moon, LogOut, 
   Home, Plus, Settings, TrendingUp, TrendingDown, 
-  CheckCircle, Trash2, Lock, FileText, Zap, Edit, RefreshCw
+  CheckCircle, Trash2, Lock, FileText, Zap, Edit, RefreshCw, Mail
 } from 'lucide-react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Doughnut } from 'react-chartjs-2';
-// Use dois pontos (..) para voltar uma pasta e entrar em lib
 import { supabase } from '../lib/supabase';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
 export default function FinProApp() {
-  // --- ESTADOS ---
   const [mounted, setMounted] = useState(false);
-  const [loading, setLoading] = useState(false); // Estado de carregamento
+  const [loading, setLoading] = useState(false);
+  const [session, setSession] = useState(null); // Sessão real do usuário
   const [activeTab, setActiveTab] = useState('home');
   const [showModal, setShowModal] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [editingId, setEditingId] = useState(null);
 
-  // Separamos: Transações vêm do Banco, User vem do LocalStorage
   const [transactions, setTransactions] = useState([]);
-  const [user, setUser] = useState({ name: "Usuário", goal: 2000, pass: "", dark: false, logged: false });
+  
+  // Login States
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authMode, setAuthMode] = useState('login'); // 'login' ou 'signup'
+  const [authLoading, setAuthLoading] = useState(false);
 
-  // Estados de formulário
-  const [authPass, setAuthPass] = useState('');
-  const [authError, setAuthError] = useState('');
+  // Form States
   const [form, setForm] = useState({ desc: '', val: '', type: 'out', cat: 'Outros' });
-  const [profileForm, setProfileForm] = useState({ name: '', goal: '', pass: '' });
+  const [profile, setProfile] = useState({ name: 'Usuário', goal: 2000, dark: false });
 
   const pdfRef = useRef(); 
 
-  // --- 1. CARREGAR DADOS ---
-  
+  // --- INICIALIZAÇÃO ---
   useEffect(() => {
     setMounted(true);
     
-    // Carrega configurações locais (Tema, Senha, Meta)
-    const localUser = localStorage.getItem('finpro_user_config');
-    if (localUser) {
-      const parsedUser = JSON.parse(localUser);
-      setUser(parsedUser);
-      if (parsedUser.dark) document.body.classList.add('dark-mode');
+    // Verifica se já existe um usuário logado
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchTransactions();
+    });
+
+    // Escuta mudanças de login (Login/Logout)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) fetchTransactions();
+      else setTransactions([]); // Limpa dados ao sair
+    });
+
+    // Carrega tema
+    const localConfig = localStorage.getItem('finpro_config');
+    if (localConfig) {
+      const parsed = JSON.parse(localConfig);
+      setProfile(parsed);
+      if (parsed.dark) document.body.classList.add('dark-mode');
     }
 
-    // Busca transações do Supabase
-    fetchTransactions();
+    return () => subscription.unsubscribe();
   }, []);
 
-  // Salva configurações locais sempre que mudar
   useEffect(() => {
     if (mounted) {
-      localStorage.setItem('finpro_user_config', JSON.stringify(user));
-      if (user.dark) document.body.classList.add('dark-mode');
+      localStorage.setItem('finpro_config', JSON.stringify(profile));
+      if (profile.dark) document.body.classList.add('dark-mode');
       else document.body.classList.remove('dark-mode');
     }
-  }, [user, mounted]);
+  }, [profile, mounted]);
 
+  // --- AUTENTICAÇÃO REAL ---
+  const handleAuth = async () => {
+    setAuthLoading(true);
+    if (authMode === 'login') {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) showToast(error.message);
+      else showToast('Bem-vindo de volta!');
+    } else {
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) showToast(error.message);
+      else showToast('Conta criada! Já pode entrar.');
+    }
+    setAuthLoading(false);
+  };
 
-  // --- FUNÇÕES DO SUPABASE ---
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+  };
 
+  // --- BANCO DE DADOS ---
   async function fetchTransactions() {
     setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('transactions')
-        .select('*')
-        .order('created_at', { ascending: false }); // Mais recentes primeiro
+    // O RLS do Supabase garante que só venham os dados deste usuário
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-      if (error) throw error;
-
-      // Mapeia os dados do banco para o formato do app
+    if (!error && data) {
       const formatted = data.map(item => ({
         id: item.id,
         desc: item.description,
@@ -83,18 +110,13 @@ export default function FinProApp() {
         date: item.date_display,
         type: item.type
       }));
-
       setTransactions(formatted);
-    } catch (error) {
-      console.error('Erro ao buscar:', error);
-      showToast('Erro de conexão');
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }
 
   async function saveTransaction() {
-    if (!form.desc || !form.val) return;
+    if (!form.desc || !form.val || !session) return;
     setLoading(true);
 
     const valFloat = parseFloat(form.val);
@@ -103,116 +125,52 @@ export default function FinProApp() {
 
     try {
       if (editingId) {
-        // ATUALIZAR (UPDATE)
-        const { error } = await supabase
-          .from('transactions')
-          .update({
-            description: form.desc,
-            value: finalVal,
-            category: form.cat,
-            type: form.type
-          })
+        await supabase.from('transactions')
+          .update({ description: form.desc, value: finalVal, category: form.cat, type: form.type })
           .eq('id', editingId);
-
-        if (error) throw error;
-        showToast("Transação atualizada!");
-
+        showToast("Atualizado!");
       } else {
-        // CRIAR (INSERT)
-        const { error } = await supabase
-          .from('transactions')
-          .insert([{
-            description: form.desc,
-            value: finalVal,
-            category: form.cat,
-            date_display: dateStr,
-            type: form.type
-          }]);
-
-        if (error) throw error;
-        showToast("Transação salva na nuvem!");
+        // O user_id é inserido automaticamente pelo default do banco ou podemos mandar explícito
+        await supabase.from('transactions').insert([{
+          description: form.desc,
+          value: finalVal,
+          category: form.cat,
+          date_display: dateStr,
+          type: form.type,
+          user_id: session.user.id // Garante o dono
+        }]);
+        showToast("Salvo!");
       }
-
-      await fetchTransactions(); // Recarrega a lista
+      fetchTransactions();
       closeModal();
-
-    } catch (error) {
-      console.error('Erro ao salvar:', error);
-      showToast('Erro ao salvar dados.');
+    } catch (e) {
+      console.error(e);
+      showToast("Erro ao salvar");
     } finally {
       setLoading(false);
     }
   }
 
   async function deleteEntry(id) {
-    if (!confirm("Excluir permanentemente?")) return;
-    setLoading(true);
-    try {
-      const { error } = await supabase.from('transactions').delete().eq('id', id);
-      if (error) throw error;
-      
-      // Remove da lista localmente para ser rápido
-      setTransactions(prev => prev.filter(t => t.id !== id));
-      showToast("Item excluído.");
-    } catch (error) {
-      console.error(error);
-      showToast('Erro ao excluir.');
-    } finally {
-      setLoading(false);
-    }
+    if (!confirm("Excluir?")) return;
+    await supabase.from('transactions').delete().eq('id', id);
+    setTransactions(prev => prev.filter(t => t.id !== id));
+    showToast("Excluído.");
   }
 
-  // --- LÓGICA DE UI E AUTH ---
-
-  const handleAuth = () => {
-    if (!user.pass) {
-      if (authPass.length < 4) return setAuthError("Mínimo 4 caracteres.");
-      setUser({ ...user, pass: authPass, logged: true });
-    } else {
-      if (authPass === user.pass) setUser({ ...user, logged: true });
-      else { setAuthError("Senha incorreta."); setAuthPass(''); }
-    }
-  };
-
+  // --- UTILITÁRIOS ---
+  const showToast = (msg) => { setToastMsg(msg); setTimeout(() => setToastMsg(''), 3000); };
   const handleEdit = (t) => {
-    setForm({
-      desc: t.desc,
-      val: Math.abs(t.val),
-      type: t.val < 0 ? 'out' : 'in',
-      cat: t.cat
-    });
-    setEditingId(t.id);
-    setShowModal(true);
+    setForm({ desc: t.desc, val: Math.abs(t.val), type: t.val < 0 ? 'out' : 'in', cat: t.cat });
+    setEditingId(t.id); setShowModal(true);
   };
-
-  const closeModal = () => {
-    setForm({ desc: '', val: '', type: 'out', cat: 'Outros' });
-    setEditingId(null);
-    setShowModal(false);
-  };
-
-  const saveProfile = () => {
-    setUser({
-      ...user,
-      name: profileForm.name || user.name,
-      goal: parseFloat(profileForm.goal) || user.goal,
-      pass: profileForm.pass || user.pass
-    });
-    showToast('Perfil salvo (Local)!');
-  };
-
-  const showToast = (msg) => {
-    setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 3000);
-  };
-
-  // --- CÁLCULOS ---
+  const closeModal = () => { setForm({ desc: '', val: '', type: 'out', cat: 'Outros' }); setEditingId(null); setShowModal(false); };
   
   const fmt = (v) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   const tin = transactions.filter(t => t.val > 0).reduce((a, b) => a + b.val, 0);
   const tout = Math.abs(transactions.filter(t => t.val < 0).reduce((a, b) => a + b.val, 0));
   const bal = tin - tout;
-  const perc = user.goal > 0 ? Math.min((tout / user.goal) * 100, 100) : 0;
+  const perc = profile.goal > 0 ? Math.min((tout / profile.goal) * 100, 100) : 0;
   const filteredTransactions = transactions.filter(t => t.desc.toLowerCase().includes(searchTerm.toLowerCase()));
 
   const chartData = {
@@ -221,33 +179,53 @@ export default function FinProApp() {
       data: [...new Set(transactions.filter(t => t.val < 0).map(t => t.cat))].map(c => 
         Math.abs(transactions.filter(t => t.cat === c && t.val < 0).reduce((s, t) => s + t.val, 0))
       ),
-      backgroundColor: ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'],
-      borderWidth: 0
+      backgroundColor: ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'], borderWidth: 0
     }]
   };
 
-  // --- PDF ---
   const exportPDF = async () => {
     const html2pdf = (await import('html2pdf.js')).default;
     const element = pdfRef.current;
     element.style.display = 'block'; 
-    html2pdf().from(element).set({ margin: 1, filename: 'finpro_db.pdf', html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'letter' } }).save().then(() => element.style.display = 'none');
+    html2pdf().from(element).set({ margin: 1, filename: 'extrato.pdf', html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'letter' } }).save().then(() => element.style.display = 'none');
   };
 
-  // --- RENDER ---
   if (!mounted) return null;
 
-  if (!user.logged) {
+  // TELA DE LOGIN REAL
+  if (!session) {
     return (
       <div className="wrapper" style={{ justifyContent: 'center', alignItems: 'center' }}>
         <div className="card" style={{ maxWidth: '400px', width: '100%', textAlign: 'center' }}>
           <div style={{ width: 60, height: 60, background: 'var(--primary)', color: 'white', borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}><Lock size={30} /></div>
-          <h2>{!user.pass ? "Crie sua Senha" : "FinPro Elite"}</h2>
-          <p style={{ color: 'var(--text-sub)', marginBottom: 25 }}>{!user.pass ? "Proteja seus dados locais." : "Digite sua senha."}</p>
-          <input type="password" placeholder="Senha" value={authPass} onChange={(e) => setAuthPass(e.target.value)} />
-          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={handleAuth}>Entrar</button>
-          {authError && <p style={{ color: 'var(--danger)', marginTop: 15 }}>{authError}</p>}
+          <h2>{authMode === 'login' ? 'Entrar no FinPro' : 'Criar Conta'}</h2>
+          <p style={{ color: 'var(--text-sub)', marginBottom: 25 }}>Seus dados seguros na nuvem.</p>
+          
+          <div style={{textAlign:'left', marginBottom:15}}>
+            <label style={{fontSize:'0.85rem', fontWeight:'bold', marginLeft:5}}>E-mail</label>
+            <div style={{position:'relative'}}>
+              <input type="email" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} style={{marginBottom:0, paddingLeft:40}} />
+              <Mail size={18} style={{position:'absolute', left:12, top:14, color:'gray'}} />
+            </div>
+          </div>
+          
+          <div style={{textAlign:'left', marginBottom:25}}>
+            <label style={{fontSize:'0.85rem', fontWeight:'bold', marginLeft:5}}>Senha</label>
+            <div style={{position:'relative'}}>
+              <input type="password" placeholder="******" value={password} onChange={e => setPassword(e.target.value)} style={{marginBottom:0, paddingLeft:40}} />
+              <Lock size={18} style={{position:'absolute', left:12, top:14, color:'gray'}} />
+            </div>
+          </div>
+
+          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={handleAuth} disabled={authLoading}>
+            {authLoading ? 'Processando...' : (authMode === 'login' ? 'Acessar Conta' : 'Cadastrar Grátis')}
+          </button>
+
+          <p style={{marginTop:20, fontSize:'0.9rem', color:'var(--text-sub)', cursor:'pointer'}} onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
+            {authMode === 'login' ? 'Não tem conta? Crie agora' : 'Já tem conta? Fazer login'}
+          </p>
         </div>
+        {toastMsg && <div className="toast-container" style={{ position: 'fixed', top: 20, right: 20 }}><div className="card" style={{ borderLeft: '5px solid var(--primary)', padding: '15px' }}>{toastMsg}</div></div>}
       </div>
     );
   }
@@ -257,22 +235,20 @@ export default function FinProApp() {
       {toastMsg && <div className="toast-container" style={{ position: 'fixed', top: 20, right: 20, zIndex: 9999 }}><div className="card" style={{ borderLeft: '5px solid var(--primary)', padding: '15px 25px', display: 'flex', gap: 10 }}><CheckCircle size={18} /> {toastMsg}</div></div>}
 
       <div className="wrapper">
-        {/* SIDEBAR */}
         <aside className="sidebar">
           <div style={{ fontWeight: 900, fontSize: '1.5rem', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 40 }}><Zap /> FinPro</div>
           <nav style={{ flex: 1 }}>
             <div className={`nav-item ${activeTab === 'home' ? 'active' : ''}`} onClick={() => setActiveTab('home')}><LayoutDashboard size={20} /> Dashboard</div>
             <div className={`nav-item ${activeTab === 'extract' ? 'active' : ''}`} onClick={() => setActiveTab('extract')}><List size={20} /> Transações</div>
             <div className={`nav-item ${activeTab === 'charts' ? 'active' : ''}`} onClick={() => setActiveTab('charts')}><PieChart size={20} /> Relatórios</div>
-            <div className={`nav-item ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => { setActiveTab('profile'); setProfileForm({ name: user.name, goal: user.goal, pass: '' }); }}><User size={20} /> Perfil</div>
+            <div className={`nav-item ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => setActiveTab('profile')}><User size={20} /> Perfil</div>
           </nav>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 20 }}>
-            <div className="nav-item" onClick={() => setUser({ ...user, dark: !user.dark })}><Moon size={20} /> Modo Escuro</div>
-            <div className="nav-item" onClick={() => { setUser({ ...user, logged: false }); setAuthPass(''); }} style={{ color: 'var(--danger)' }}><LogOut size={20} /> Sair</div>
+            <div className="nav-item" onClick={() => setProfile({ ...profile, dark: !profile.dark })}><Moon size={20} /> Modo Escuro</div>
+            <div className="nav-item" onClick={handleLogout} style={{ color: 'var(--danger)' }}><LogOut size={20} /> Sair</div>
           </div>
         </aside>
 
-        {/* MOBILE NAV */}
         <nav className="mobile-nav">
           <div className={`nav-item ${activeTab === 'home' ? 'active' : ''}`} onClick={() => setActiveTab('home')}><Home /></div>
           <div className={`nav-item ${activeTab === 'extract' ? 'active' : ''}`} onClick={() => setActiveTab('extract')}><List /></div>
@@ -281,13 +257,12 @@ export default function FinProApp() {
           <div className={`nav-item ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => setActiveTab('profile')}><Settings /></div>
         </nav>
 
-        {/* MAIN */}
         <main className="main-content">
           <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 30 }}>
             <div>
-              <h1 style={{ fontSize: '1.6rem' }}>Olá, {user.name}</h1>
+              <h1 style={{ fontSize: '1.6rem' }}>Olá, {profile.name}</h1>
               <div style={{display:'flex', gap:10, alignItems:'center'}}>
-                <p style={{ color: 'var(--text-sub)', fontSize: '0.9rem' }}>{new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}</p>
+                <p style={{ color: 'var(--text-sub)', fontSize: '0.9rem' }}>{session.user.email}</p>
                 {loading && <RefreshCw size={14} className="animate-spin" />}
               </div>
             </div>
@@ -297,7 +272,7 @@ export default function FinProApp() {
           {activeTab === 'home' && (
             <section>
               <div className="card hero-card">
-                <small style={{ opacity: 0.8 }}>SALDO EM NUVEM</small>
+                <small style={{ opacity: 0.8 }}>SALDO CONTA</small>
                 <h2 style={{ fontSize: '2.5rem', margin: '8px 0' }}>{fmt(bal)}</h2>
                 <div style={{ display: 'flex', gap: 20, fontSize: '0.9rem' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><TrendingUp size={14} /> {fmt(tin)}</span>
@@ -307,11 +282,11 @@ export default function FinProApp() {
               <div className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', marginBottom: 10 }}><span>Meta Mensal</span><span>{Math.round(perc)}%</span></div>
                 <div className="progress-container"><div className="progress-bar" style={{ width: `${perc}%`, background: perc > 90 ? 'var(--danger)' : 'var(--primary)' }}></div></div>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-sub)' }}>Gasto: {fmt(tout)} | Limite: {fmt(user.goal)}</p>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-sub)' }}>Gasto: {fmt(tout)} | Limite: {fmt(profile.goal)}</p>
               </div>
               <h3>Atividade Recente</h3>
               <div style={{ marginTop: 15 }}>
-                {transactions.length === 0 && !loading && <p style={{color:'var(--text-sub)', textAlign:'center', marginTop:20}}>Nenhuma transação encontrada.</p>}
+                {transactions.length === 0 && !loading && <p style={{color:'var(--text-sub)', textAlign:'center', marginTop:20}}>Sem registros nesta conta.</p>}
                 {transactions.slice(0, 5).map(t => <TransactionItem key={t.id} t={t} fmt={fmt} onDelete={deleteEntry} onEdit={handleEdit} />)}
               </div>
             </section>
@@ -320,13 +295,11 @@ export default function FinProApp() {
           {activeTab === 'extract' && (
             <section>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                <h3>Todas as Transações</h3>
+                <h3>Extrato Completo</h3>
                 <button className="btn" onClick={exportPDF} style={{ background: 'var(--card)', border: '1px solid var(--border)' }}><FileText size={18} /> PDF</button>
               </div>
               <input type="text" placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-              <div>
-                {filteredTransactions.map(t => <TransactionItem key={t.id} t={t} fmt={fmt} onDelete={deleteEntry} onEdit={handleEdit} />)}
-              </div>
+              <div>{filteredTransactions.map(t => <TransactionItem key={t.id} t={t} fmt={fmt} onDelete={deleteEntry} onEdit={handleEdit} />)}</div>
             </section>
           )}
 
@@ -342,15 +315,13 @@ export default function FinProApp() {
           {activeTab === 'profile' && (
             <section>
               <div className="card">
-                <h3>Configurações (Local)</h3>
+                <h3>Perfil</h3>
                 <div style={{ marginTop: 20 }}>
-                  <label>Nome</label>
-                  <input type="text" value={profileForm.name} onChange={e => setProfileForm({...profileForm, name: e.target.value})} />
-                  <label>Meta Mensal</label>
-                  <input type="number" value={profileForm.goal} onChange={e => setProfileForm({...profileForm, goal: e.target.value})} />
-                  <label>Alterar Senha</label>
-                  <input type="password" placeholder="Nova senha" value={profileForm.pass} onChange={e => setProfileForm({...profileForm, pass: e.target.value})} />
-                  <button className="btn btn-primary" style={{ width: '100%' }} onClick={saveProfile}>Salvar Alterações</button>
+                  <label>Seu Nome</label>
+                  <input type="text" value={profile.name} onChange={e => setProfile({...profile, name: e.target.value})} />
+                  <label>Meta de Gastos</label>
+                  <input type="number" value={profile.goal} onChange={e => setProfile({...profile, goal: e.target.value})} />
+                  <small>E-mail: {session.user.email}</small>
                 </div>
               </div>
             </section>
@@ -377,28 +348,20 @@ export default function FinProApp() {
               <option value="Outros">📦 Outros</option>
             </select>
             <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-              <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={saveTransaction} disabled={loading}>{loading ? 'Salvando...' : 'Salvar'}</button>
+              <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={saveTransaction} disabled={loading}>{loading ? '...' : 'Salvar'}</button>
               <button className="btn" style={{ flex: 1, background: 'var(--bg)', justifyContent: 'center' }} onClick={closeModal}>Cancelar</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* PDF TEMPLATE */}
       <div id="pdf-template" ref={pdfRef} style={{ display: 'none', padding: 40, color: 'black', background: 'white' }}>
-        <h1 style={{ color: '#4f46e5' }}>FinPro Elite - Relatório</h1>
-        <p>Usuário: {user.name} | Data: {new Date().toLocaleDateString()}</p>
+        <h1 style={{ color: '#4f46e5' }}>Relatório FinPro</h1>
+        <p>Usuário: {profile.name} ({session.user.email})</p>
         <hr style={{ margin: '20px 0' }} />
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
           <thead><tr style={{ borderBottom: '2px solid #333' }}><th>Data</th><th>Descrição</th><th>Valor</th></tr></thead>
-          <tbody>
-            {transactions.map(t => (
-              <tr key={t.id} style={{ borderBottom: '1px solid #ccc' }}>
-                <td style={{ padding: 8 }}>{t.date}</td><td>{t.desc}</td>
-                <td style={{ color: t.val < 0 ? 'red' : 'green' }}>{t.val.toFixed(2)}</td>
-              </tr>
-            ))}
-          </tbody>
+          <tbody>{transactions.map(t => <tr key={t.id} style={{ borderBottom: '1px solid #ccc' }}><td style={{ padding: 8 }}>{t.date}</td><td>{t.desc}</td><td style={{ color: t.val < 0 ? 'red' : 'green' }}>{t.val.toFixed(2)}</td></tr>)}</tbody>
         </table>
       </div>
     </>
